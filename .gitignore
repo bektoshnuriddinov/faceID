@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Images
+images/
+images/**
+
+# Database config
+app/services/database.py
+
+# IDE
+.idea/
+
+# Env
+.env
+.env.*
