@@ -1,20 +1,24 @@
-from fastapi.responses import JSONResponse
+# app/utils/response.py
+from typing import Any, Dict
 
-def success(message: str, data: dict = None, code: int = 200):
-    payload = {
+def success(data: Any = None, message: str = "Success", **kwargs) -> Dict:
+    """Success response formatter"""
+    response = {
         "status": "ok",
-        "message": message
+        "message": message,
+        **kwargs
     }
-    if data:
-        payload["data"] = data
-    return JSONResponse(status_code=code, content=payload)
+    if data is not None:
+        response["data"] = data
+    return response
 
-
-def error(message: str, code: int = 400):
-    return JSONResponse(
-        status_code=code,
-        content={
-            "status": "error",
-            "message": message
-        }
-    )
+def error(message: str = "Error", code: str = None, **kwargs) -> Dict:
+    """Error response formatter"""
+    response = {
+        "status": "error",
+        "message": message,
+        **kwargs
+    }
+    if code:
+        response["code"] = code
+    return response

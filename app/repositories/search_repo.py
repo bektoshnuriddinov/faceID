@@ -1,0 +1,192 @@
+from __future__ import annotations
+from typing import Optional, List, Dict, Any, Tuple
+
+class SearchRepo:
+    def __init__(self, client):
+        self.client = client
+
+    def search_similar_people(
+        self,
+        ref_vec: List[float],
+        *,
+        top_k: int = 10,
+        ef_search: Optional[int] = None,
+        citizen: Optional[int] = None,
+        dtb: Optional[str] = None,       # 'YYYY-MM-DD'
+        passport: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Возвращает top_k кандидатов (уникально по person_id) по косинусной дистанции.
+        Фильтры применяются по текущим snapshot-строкам (у вас всегда вставляется snapshot).
+        """
+        where = ["has_embedding = 1"]
+        params: Dict[str, Any] = {"ref": ref_vec}
+
+        if citizen is not None:
+            where.append("citizen = %(citizen)s")
+            params["citizen"] = int(citizen)
+
+        if dtb is not None:
+            # Date32 можно сравнивать строкой
+            where.append("dtb = toDate32(%(dtb)s)")
+            params["dtb"] = dtb
+
+        if passport is not None:
+            where.append("passport = %(passport)s")
+            params["passport"] = passport
+
+        where_sql = " AND ".join(where)
+
+        settings_sql = ""
+        if ef_search is not None:
+            settings_sql = f" SETTINGS hnsw_candidate_list_size_for_search = {int(ef_search)}"
+
+        # LIMIT 1 BY person_id — чтобы не получить 10 snapshot одного и того же person_id
+        rows = self.client.execute(
+            f"""
+            WITH %(ref)s AS reference_vec
+            SELECT
+                person_id,
+                face_url,
+                cosineDistance(polygons, reference_vec) AS distance
+            FROM person_documents_v2
+            WHERE {where_sql}
+            ORDER BY distance ASC
+            LIMIT 1 BY person_id
+            LIMIT {int(top_k)}
+            {settings_sql}
+            """,
+            params,
+        )
+
+        return [{"person_id": r[0], "found_face_url": r[1], "distance": float(r[2])} for r in rows]
+
+    def load_profiles(self, person_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        if not person_ids:
+            return {}
+        ids = tuple(person_ids)
+
+        rows = self.client.execute(
+            """
+            SELECT
+              person_id,
+              argMax(full_name, version) AS full_name,
+              argMax(passport, version) AS passport,
+              argMax(dtb, version) AS dtb,
+              argMax(sex, version) AS sex,
+              argMax(citizen, version) AS citizen,
+              argMax(citizen_sgb, version) AS citizen_sgb,
+              argMax(face_url, version) AS face_url
+            FROM person_documents_v2
+            WHERE person_id IN %(ids)s
+            GROUP BY person_id
+            """,
+            {"ids": ids},
+        )
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            out[r[0]] = {
+                "full_name": r[1],
+                "passport": r[2],
+                "dtb": r[3],
+                "sex": int(r[4]) if r[4] is not None else None,
+                "citizen": int(r[5]) if r[5] is not None else None,
+                "citizen_sgb": int(r[6]) if r[6] is not None else None,
+                "face_url": r[7],
+            }
+        return out
+
+    def load_sgb_ids(self, person_ids: List[str]) -> Dict[str, int]:
+        """
+        Возвращаем "текущий" sgb_person_id.
+        Так как у вас маппинг sgb->person, обратный выбор неоднозначен.
+        Я беру argMax(sgb_person_id, version) по строкам is_active=1.
+        """
+        if not person_ids:
+            return {}
+        ids = tuple(person_ids)
+
+
+        rows = self.client.execute(
+            """
+            SELECT
+              person_id,
+              argMax(sgb_person_id, version) AS sgb_person_id
+            FROM person_sgb_map_v2
+            WHERE person_id IN %(ids)s AND is_active = 1
+            GROUP BY person_id
+            """,
+            {"ids": ids},
+        )
+        return {r[0]: int(r[1]) for r in rows if r[1] is not None}
+
+    def load_last_entry_exit(self, person_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        if not person_ids:
+            return {}
+        ids = tuple(person_ids)
+
+        rows = self.client.execute(
+            """
+            WITH dedup AS
+            (
+                SELECT
+                    person_id,
+                    border_id,
+                    action,
+                    argMax(reg_date, version) AS reg_date,
+                    argMax(direction_country, version) AS direction_country,
+                    argMax(direction_country_sgb, version) AS direction_country_sgb,
+                    argMax(visa_type, version) AS visa_type,
+                    argMax(visa_number, version) AS visa_number,
+                    argMax(visa_organ, version) AS visa_organ,
+                    argMax(visa_date_from, version) AS visa_date_from,
+                    argMax(visa_date_to, version) AS visa_date_to
+                FROM person_borders_v2
+                WHERE person_id IN %(ids)s
+                GROUP BY person_id, border_id, action
+            )
+            SELECT
+                person_id,
+
+                maxIf(reg_date, action = 1) AS last_entry_date,
+                argMaxIf(border_id, reg_date, action = 1) AS last_entry_border_id,
+                argMaxIf(direction_country, reg_date, action = 1) AS last_entry_direction_country,
+                argMaxIf(direction_country_sgb, reg_date, action = 1) AS last_entry_direction_country_sgb,
+                argMaxIf(visa_type, reg_date, action = 1) AS last_entry_visa_type,
+                argMaxIf(visa_number, reg_date, action = 1) AS last_entry_visa_number,
+                argMaxIf(visa_organ, reg_date, action = 1) AS last_entry_visa_organ,
+                argMaxIf(visa_date_from, reg_date, action = 1) AS last_entry_visa_date_from,
+                argMaxIf(visa_date_to, reg_date, action = 1) AS last_entry_visa_date_to,
+
+                maxIf(reg_date, action = 2) AS last_exit_date,
+                argMaxIf(border_id, reg_date, action = 2) AS last_exit_border_id,
+                argMaxIf(direction_country, reg_date, action = 2) AS last_exit_direction_country,
+                argMaxIf(direction_country_sgb, reg_date, action = 2) AS last_exit_direction_country_sgb
+            FROM dedup
+            GROUP BY person_id
+            """,
+            {"ids": ids},
+        )
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            out[r[0]] = {
+                "last_entry": {
+                    "reg_date": r[1],
+                    "border_id": r[2],
+                    "direction_country": r[3],
+                    "direction_country_sgb": r[4],
+                    "visa_type": r[5],
+                    "visa_number": r[6],
+                    "visa_organ": r[7],
+                    "visa_date_from": r[8],
+                    "visa_date_to": r[9],
+                },
+                "last_exit": {
+                    "reg_date": r[10],
+                    "border_id": r[11],
+                    "direction_country": r[12],
+                    "direction_country_sgb": r[13],
+                }
+            }
+        return out
