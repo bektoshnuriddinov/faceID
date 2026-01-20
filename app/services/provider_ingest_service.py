@@ -11,7 +11,7 @@ import asyncio
 
 EMB_OK = 1
 EMB_NONE = 0
-EMB_FAILED = 2
+EMB_LOW_QUALITY = 2
 
 @dataclass
 class PhotoResult:
@@ -63,7 +63,7 @@ class ProviderIngestService:
             )
 
             if res is None:
-                return PhotoResult(face_url=None, polygons=zero_embedding(), embedding_status=EMB_FAILED)
+                return PhotoResult(face_url=None, polygons=zero_embedding(), embedding_status=EMB_LOW_QUALITY)
 
             face_url = f"{self.images_root}/{sgb_person_id}/{person_id}.jpg"
             await save_bytes(face_url, img_bytes)
@@ -79,7 +79,7 @@ class ProviderIngestService:
             )
 
         except (ImageError, Exception):
-            return PhotoResult(face_url=None, polygons=zero_embedding(), embedding_status=EMB_FAILED)
+            return PhotoResult(face_url=None, polygons=zero_embedding(), embedding_status=EMB_LOW_QUALITY)
 
     # 3) fallback from docs (now includes metrics)
     def fallback_photo_from_documents(self, person_id: str) -> PhotoResult:
@@ -165,17 +165,17 @@ class ProviderIngestService:
 
         if payload.photo:
             new_photo = await self.process_photo(payload.sgb_person_id, person_id, payload.photo)
-
-            # Agar rasmda yuz aniqlanmasa, xato qaytarish
-            if new_photo.embedding_status == EMB_FAILED:
-                raise ValueError(
-                    "No valid face detected in the photo. "
-                    "Please ensure the photo meets these requirements:\n"
-                    "1. Face is clearly visible and frontal\n"
-                    "2. Good lighting conditions\n"
-                    "3. Face size is at least 80px\n"
-                    "4. Image is not blurry"
-                )
+#
+#             # Agar rasmda yuz aniqlanmasa, xato qaytarish
+#             if new_photo.embedding_status == EMB_LOW_QUALITY:
+#                 raise ValueError(
+#                     "No valid face detected in the photo. "
+#                     "Please ensure the photo meets these requirements:\n"
+#                     "1. Face is clearly visible and frontal\n"
+#                     "2. Good lighting conditions\n"
+#                     "3. Face size is at least 80px\n"
+#                     "4. Image is not blurry"
+#                 )
         else:
             new_photo = PhotoResult(face_url=None, polygons=zero_embedding(), embedding_status=EMB_NONE)
 
