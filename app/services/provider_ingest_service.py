@@ -63,7 +63,9 @@ class ProviderIngestService:
             )
 
             if res is None:
-                return PhotoResult(face_url=None, polygons=zero_embedding(), embedding_status=EMB_LOW_QUALITY)
+                face_url = f"{self.images_root}/low_quality/{sgb_person_id}/{person_id}.jpg"
+                await save_bytes(face_url, img_bytes)
+                return PhotoResult(face_url=face_url, polygons=zero_embedding(), embedding_status=EMB_LOW_QUALITY)
 
             face_url = f"{self.images_root}/{sgb_person_id}/{person_id}.jpg"
             await save_bytes(face_url, img_bytes)
