@@ -1,10 +1,14 @@
 from __future__ import annotations
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
+
 
 class SearchRepo:
     def __init__(self, client):
         self.client = client
 
+    # ==========================================================
+    # Face similarity search (core)
+    # ==========================================================
     def search_similar_people(
         self,
         ref_vec: List[float],
@@ -12,36 +16,41 @@ class SearchRepo:
         top_k: int = 10,
         ef_search: Optional[int] = None,
         citizen: Optional[int] = None,
-        dtb: Optional[str] = None,       # 'YYYY-MM-DD'
-        passport: Optional[str] = None,
+        dtb_from: Optional[str] = None,
+        dtb_to: Optional[str] = None,
+        max_distance: float = 0.75,   # 👈 MUHIM
     ) -> List[Dict[str, Any]]:
-        """
-        Возвращает top_k кандидатов (уникально по person_id) по косинусной дистанции.
-        Фильтры применяются по текущим snapshot-строкам (у вас всегда вставляется snapshot).
-        """
-        where = ["has_embedding = 1"]
-        params: Dict[str, Any] = {"ref": ref_vec}
+
+        where = [
+            "has_embedding = 1",
+            "cosineDistance(polygons, reference_vec) <= %(max_distance)s"
+        ]
+
+        params: Dict[str, Any] = {
+            "ref": ref_vec,
+            "max_distance": max_distance,
+        }
 
         if citizen is not None:
             where.append("citizen = %(citizen)s")
             params["citizen"] = int(citizen)
 
-        if dtb is not None:
-            # Date32 можно сравнивать строкой
-            where.append("dtb = toDate32(%(dtb)s)")
-            params["dtb"] = dtb
+        if dtb_from is not None:
+            where.append("dtb >= toDate32(%(dtb_from)s)")
+            params["dtb_from"] = dtb_from
 
-        if passport is not None:
-            where.append("passport = %(passport)s")
-            params["passport"] = passport
+        if dtb_to is not None:
+            where.append("dtb <= toDate32(%(dtb_to)s)")
+            params["dtb_to"] = dtb_to
 
         where_sql = " AND ".join(where)
 
         settings_sql = ""
         if ef_search is not None:
-            settings_sql = f" SETTINGS hnsw_candidate_list_size_for_search = {int(ef_search)}"
+            settings_sql = (
+                f" SETTINGS hnsw_candidate_list_size_for_search = {int(ef_search)}"
+            )
 
-        # LIMIT 1 BY person_id — чтобы не получить 10 snapshot одного и того же person_id
         rows = self.client.execute(
             f"""
             WITH %(ref)s AS reference_vec
@@ -59,70 +68,85 @@ class SearchRepo:
             params,
         )
 
-        return [{"person_id": r[0], "found_face_url": r[1], "distance": float(r[2])} for r in rows]
+        return [
+            {
+                "person_id": r[0],
+                "found_face_url": r[1],
+                "distance": float(r[2]),
+            }
+            for r in rows
+        ]
 
+    # ==========================================================
+    # Load current profile snapshot
+    # ==========================================================
     def load_profiles(self, person_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not person_ids:
             return {}
+
         ids = tuple(person_ids)
 
         rows = self.client.execute(
             """
             SELECT
-              person_id,
-              argMax(full_name, version) AS full_name,
-              argMax(passport, version) AS passport,
-              argMax(dtb, version) AS dtb,
-              argMax(sex, version) AS sex,
-              argMax(citizen, version) AS citizen,
-              argMax(citizen_sgb, version) AS citizen_sgb,
-              argMax(face_url, version) AS face_url
+                person_id,
+                argMax(full_name, version) AS full_name,
+                argMax(dtb, version) AS dtb,
+                argMax(sex, version) AS sex,
+                argMax(citizen, version) AS citizen,
+                argMax(citizen_sgb, version) AS citizen_sgb,
+                argMax(face_url, version) AS face_url
             FROM person_documents_v2
             WHERE person_id IN %(ids)s
             GROUP BY person_id
             """,
             {"ids": ids},
         )
+
         out: Dict[str, Dict[str, Any]] = {}
         for r in rows:
             out[r[0]] = {
                 "full_name": r[1],
-                "passport": r[2],
-                "dtb": r[3],
-                "sex": int(r[4]) if r[4] is not None else None,
-                "citizen": int(r[5]) if r[5] is not None else None,
-                "citizen_sgb": int(r[6]) if r[6] is not None else None,
-                "face_url": r[7],
+                "dtb": r[2],
+                "sex": int(r[3]) if r[3] is not None else None,
+                "citizen": int(r[4]) if r[4] is not None else None,
+                "citizen_sgb": int(r[5]) if r[5] is not None else None,
+                "face_url": r[6],
             }
+
         return out
 
+    # ==========================================================
+    # Load active SGB person id
+    # ==========================================================
     def load_sgb_ids(self, person_ids: List[str]) -> Dict[str, int]:
-        """
-        Возвращаем "текущий" sgb_person_id.
-        Так как у вас маппинг sgb->person, обратный выбор неоднозначен.
-        Я беру argMax(sgb_person_id, version) по строкам is_active=1.
-        """
         if not person_ids:
             return {}
-        ids = tuple(person_ids)
 
+        ids = tuple(person_ids)
 
         rows = self.client.execute(
             """
             SELECT
-              person_id,
-              argMax(sgb_person_id, version) AS sgb_person_id
+                person_id,
+                argMax(sgb_person_id, version) AS sgb_person_id
             FROM person_sgb_map_v2
-            WHERE person_id IN %(ids)s AND is_active = 1
+            WHERE person_id IN %(ids)s
+              AND is_active = 1
             GROUP BY person_id
             """,
             {"ids": ids},
         )
+
         return {r[0]: int(r[1]) for r in rows if r[1] is not None}
 
+    # ==========================================================
+    # Load last entry / exit
+    # ==========================================================
     def load_last_entry_exit(self, person_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not person_ids:
             return {}
+
         ids = tuple(person_ids)
 
         rows = self.client.execute(
@@ -187,6 +211,7 @@ class SearchRepo:
                     "border_id": r[11],
                     "direction_country": r[12],
                     "direction_country_sgb": r[13],
-                }
+                },
             }
+
         return out

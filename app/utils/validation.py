@@ -132,6 +132,50 @@ def validate_visa_fields_consistency(payload) -> None:
         if not payload.visa_organ or not payload.visa_organ.strip():
             raise ValidationError("Visa organ cannot be empty when visa information is provided", "visa_organ")
 
+def validate_date_of_birth_range(
+    date_from: Optional[date],
+    date_to: Optional[date]
+) -> None:
+    """
+    date_of_birth_from va date_of_birth_to:
+    - ikkalasi birga kelishi shart
+    - yoki ikkalasi ham yo‘q bo‘lishi kerak
+    """
+
+    # bittasi bor, bittasi yo‘q
+    if (date_from is None) ^ (date_to is None):
+        raise ValidationError(
+            "date_of_birth_from and date_of_birth_to must be provided together",
+            "date_of_birth_from"
+        )
+
+    # ikkalasi ham yo‘q — OK
+    if date_from is None and date_to is None:
+        return
+
+    today = date.today()
+
+    # kelajak sanasi bo‘lmasin
+    if date_from > today or date_to > today:
+        raise ValidationError(
+            "date_of_birth cannot be in the future",
+            "date_of_birth_from"
+        )
+
+    # juda eski bo‘lmasin
+    if date_from.year < 1900 or date_to.year < 1900:
+        raise ValidationError(
+            "date_of_birth is too old",
+            "date_of_birth_from"
+        )
+
+    # from <= to
+    if date_from > date_to:
+        raise ValidationError(
+            "date_of_birth_from must be less than or equal to date_of_birth_to",
+            "date_of_birth_from"
+        )
+
 
 def validate_all_fields(payload) -> None:
     """Validate all fields in payload"""
@@ -168,3 +212,23 @@ def validate_all_fields(payload) -> None:
 
     # Visa fields consistency validation
     validate_visa_fields_consistency(payload)
+
+
+def validate_search_fields(payload) -> None:
+    """
+    Search payload uchun validation
+    """
+    # photo tekshiruvi
+    if not payload.photo_base64 or not payload.photo_base64.strip():
+        raise ValidationError("photo_base64 is required", "photo_base64")
+
+    # citizen
+    if payload.citizen is not None and payload.citizen <= 0:
+        raise ValidationError("Invalid citizen code", "citizen")
+
+    # date range
+    validate_date_of_birth_range(
+        payload.date_of_birth_from,
+        payload.date_of_birth_to
+    )
+

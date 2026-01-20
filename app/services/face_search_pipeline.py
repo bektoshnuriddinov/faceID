@@ -7,103 +7,65 @@ import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
 
-
-# =======================
-# Constants
-# =======================
-
 EMB_SIZE = 512
 
 
-# =======================
-# Data structures
-# =======================
-
 @dataclass
-class FaceFound:
-    bbox: Tuple[int, int, int, int]   # x1, y1, x2, y2
+class FaceCandidate:
+    bbox: Tuple[int, int, int, int]
     det_score: float
     face_size: int
     blur: float
-    embedding: List[float]            # 512-d normalized embedding
-    face_b64: str                     # cropped face (base64 jpeg)
 
+    embedding: List[float] | None
+    face_b64: str
 
-# =======================
-# Utility functions
-# =======================
+    quality_ok: bool
+    quality_issues: List[str]
+
 
 def _blur_score(image_bgr: np.ndarray) -> float:
-    """Laplacian-based blur score (higher = sharper)."""
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
-def _clamp_bbox(
-    b: Tuple[float, float, float, float],
-    w: int,
-    h: int
-) -> Tuple[int, int, int, int]:
-    """Clamp bounding box to image bounds."""
+def _clamp_bbox(b, w, h):
     x1, y1, x2, y2 = map(int, b)
-    x1 = max(0, min(x1, w - 1))
-    y1 = max(0, min(y1, h - 1))
-    x2 = max(0, min(x2, w))
-    y2 = max(0, min(y2, h))
-    return x1, y1, x2, y2
+    return (
+        max(0, min(x1, w - 1)),
+        max(0, min(y1, h - 1)),
+        max(0, min(x2, w)),
+        max(0, min(y2, h)),
+    )
 
 
-def _crop_to_base64_jpeg(
-    image_bgr: np.ndarray,
-    bbox: Tuple[int, int, int, int],
-    *,
-    quality: int = 85
-) -> str:
-    """Crop face and return base64-encoded JPEG."""
+def _crop_to_base64_jpeg(image_bgr, bbox, quality=85) -> str:
     import base64
-
     x1, y1, x2, y2 = bbox
     crop = image_bgr[y1:y2, x1:x2]
-
     if crop.size == 0:
         crop = image_bgr
-
     ok, buf = cv2.imencode(
         ".jpg",
         crop,
-        [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)],
+        [int(cv2.IMWRITE_JPEG_QUALITY), quality],
     )
-
     if not ok:
         ok, buf = cv2.imencode(".jpg", image_bgr)
-
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
-def add_margin(image, margin_ratio=0.05):
+
+def add_margin(image, ratio=0.05):
     h, w = image.shape[:2]
-
-    top = int(h * margin_ratio)
-    bottom = int(h * margin_ratio)
-    left = int(w * margin_ratio)
-    right = int(w * margin_ratio)
-
-    color = [255, 255, 255]
-
-    new_img = cv2.copyMakeBorder(
-        image,
-        top, bottom, left, right,
-        borderType=cv2.BORDER_CONSTANT,
-        value=color
+    m = int(min(h, w) * ratio)
+    return cv2.copyMakeBorder(
+        image, m, m, m, m,
+        cv2.BORDER_CONSTANT,
+        value=[255, 255, 255],
     )
 
-    return new_img
 
-
-# =======================
-# Face detection pipeline
-# =======================
-
-def detect_all_faces_strict(
+def detect_all_faces_with_quality(
     image_bgr: np.ndarray,
     face_app: FaceAnalysis,
     *,
@@ -111,21 +73,19 @@ def detect_all_faces_strict(
     min_face_size: int = 80,
     min_blur: float = 60.0,
     max_faces: int = 10,
-) -> List[FaceFound]:
-    """
-    Detect faces, apply strict quality gates, and return embeddings + cropped faces.
+) -> List[FaceCandidate]:
 
-    All parameters after `*` are keyword-only.
-    """
-    image_bgr = add_margin(image_bgr, margin_ratio=0.05)
+    image_bgr = add_margin(image_bgr)
     faces = face_app.get(image_bgr)
     if not faces:
         return []
 
     h, w = image_bgr.shape[:2]
-    results: List[FaceFound] = []
+    results: List[FaceCandidate] = []
 
     for f in faces:
+        issues: List[str] = []
+
         det_score = float(getattr(f, "det_score", 0.0))
         bbox = _clamp_bbox(
             getattr(f, "bbox", (0, 0, 0, 0)),
@@ -134,52 +94,42 @@ def detect_all_faces_strict(
         )
 
         x1, y1, x2, y2 = bbox
-        face_w, face_h = (x2 - x1), (y2 - y1)
-        face_size = min(face_w, face_h)
+        face_size = min(x2 - x1, y2 - y1)
 
-        if face_w > 0 and face_h > 0:
-            crop = image_bgr[y1:y2, x1:x2]
-        else:
-            crop = image_bgr
-
+        crop = image_bgr[y1:y2, x1:x2] if face_size > 0 else image_bgr
         blur = _blur_score(crop)
 
-        # -----------------------
-        # Quality gates
-        # -----------------------
+        # -------- QUALITY CHECK (SOFT) --------
         if det_score < min_det_score:
-            continue
-
+            issues.append("low_detection_score")
         if face_size < min_face_size:
-            continue
-
+            issues.append("face_too_small")
         if blur < min_blur:
-            continue
+            issues.append("image_blurry")
 
         emb = getattr(f, "normed_embedding", None)
         if emb is None or len(emb) != EMB_SIZE:
-            continue
-
-        face_b64 = _crop_to_base64_jpeg(
-            image_bgr,
-            bbox,
-            quality=85,
-        )
+            issues.append("embedding_not_available")
+            embedding = None
+        else:
+            embedding = emb.tolist()
 
         results.append(
-            FaceFound(
+            FaceCandidate(
                 bbox=bbox,
                 det_score=det_score,
                 face_size=face_size,
                 blur=blur,
-                embedding=emb.tolist(),
-                face_b64=face_b64,
+                embedding=embedding,          # ✅ HECH QACHON O‘CHMAYDI
+                face_b64=_crop_to_base64_jpeg(image_bgr, bbox),
+                quality_ok=(len(issues) == 0),
+                quality_issues=issues,
             )
         )
 
-    # Sort by confidence and size, take top-N
+    # Avval sifatli, keyin yirik va ishonchli
     results.sort(
-        key=lambda x: (x.det_score, x.face_size),
+        key=lambda x: (x.quality_ok, x.det_score, x.face_size),
         reverse=True,
     )
 
