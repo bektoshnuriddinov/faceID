@@ -156,8 +156,6 @@ class SearchService:
             # -------------------------
             # 1️⃣ Search similar people
             # -------------------------
-            # print face len
-            print(f"Searching for face {face_index} (len={len(face.embedding)})...")
             candidates = self.repo.search_similar_people(
                 face.embedding,
                 top_k=top_k,
@@ -176,9 +174,6 @@ class SearchService:
             # -------------------------
             person_ids = [c["person_id"] for c in candidates]
             uniq_ids = list(dict.fromkeys(person_ids))
-            # print id and distance
-            for c in candidates:
-                print(f"Person ID: {c['person_id']}, Distance: {c['distance']}")
 
             # -------------------------
             # 3️⃣ Load all related data
