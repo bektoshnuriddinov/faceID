@@ -135,7 +135,7 @@ class SearchService:
                 "face_index": face_index,
                 "quality_ok": face.quality_ok,
                 "quality_issues": face.quality_issues,
-#                 "crop_face_base64": face.face_b64,
+                "crop_face_base64": face.face_b64,
                 "meta": {
                     "bbox": face.bbox,
                     "det_score": face.det_score,
@@ -191,7 +191,6 @@ class SearchService:
                 distance = c["distance"]
                 confidence = classify_confidence(distance)
 
-                # ❌ weaklarni tashlaymiz
                 if confidence == "weak":
                     continue
 
@@ -210,7 +209,7 @@ class SearchService:
                         "sex": profile.get("sex"),
                         "citizen": profile.get("citizen"),
                         "citizen_sgb": profile.get("citizen_sgb"),
-                        "face_url": profile.get("face_url"),
+#                         "face_url": profile.get("face_url"),
 
                         "last_entry": border.get("last_entry"),
                         "last_exit": border.get("last_exit"),
@@ -219,7 +218,7 @@ class SearchService:
                         "distance": distance,
                         "accuracy": distance_to_accuracy(distance),
                         "confidence": confidence,
-                        "found_face_url": c.get("found_face_url"),
+#                         "found_face_url": c.get("found_face_url"),
                     },
                 })
 
