@@ -120,14 +120,12 @@ def detect_all_faces_with_quality(
                 det_score=det_score,
                 face_size=face_size,
                 blur=blur,
-                embedding=embedding,          # ✅ HECH QACHON O‘CHMAYDI
+                embedding=embedding,
                 face_b64=_crop_to_base64_jpeg(image_bgr, bbox),
                 quality_ok=(len(issues) == 0),
                 quality_issues=issues,
             )
         )
-
-    # Avval sifatli, keyin yirik va ishonchli
     results.sort(
         key=lambda x: (x.quality_ok, x.det_score, x.face_size),
         reverse=True,
