@@ -2,9 +2,11 @@
 from fastapi import APIRouter, Request
 from app.services.database import client
 from app.utils.validation import validate_all_fields, ValidationError
+from app.utils.response import success, error
 from app.schemas.provider import ProviderPersonIn
 from app.repositories.faceid_repo import FaceIdRepo
 from app.services.provider_ingest_service import ProviderIngestService
+from app.schemas.common import PersonResponse
 
 router = APIRouter()
 
@@ -14,11 +16,6 @@ def build_service(request: Request) -> ProviderIngestService:
     return ProviderIngestService(repo=repo, face_app=face_app)
 
 def transform_codes(payload):
-    """
-    Kodlarni transformatsiya qilish:
-    - citizen_sgb va direction_country_sgb: 170 -> 739001138
-    - citizen va direction_country: 161 -> 246
-    """
     # Original nusxasini saqlab qo'ymaslik uchun dict ga o'tkazamiz
     data = payload.dict()
 
@@ -38,7 +35,51 @@ def transform_codes(payload):
     # Yangi payload yaratish
     return ProviderPersonIn(**data)
 
-@router.post("/register-persons")
+@router.post(
+    "/register-persons",
+    response_model=PersonResponse,
+    summary="Register person from provider system",
+    description="""
+Registers a person using provider data.
+
+### Always returns HTTP 200
+
+Check `status` field:
+- `ok`    → success
+- `error` → validation or business error
+""",
+    responses={
+        200: {
+            "description": "Success or error response",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "success": {
+                            "summary": "Successful registration",
+                            "value": {
+                                "status": "ok",
+                                "message": "Person registered successfully",
+                                "person_id": 123
+                            }
+                        },
+                        "error": {
+                            "summary": "Error",
+                            "value": {
+                                "status": "error",
+                                "message": "visa_type: All visa fields must be provided together or none at all",
+                                "person_id": None
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        422: {
+                "description": "Hidden",
+                "content": {}
+        }
+    }
+)
 async def ingest_person(request: Request, payload: ProviderPersonIn):
     try:
         # 1. Kodlarni transformatsiya qilish
@@ -52,37 +93,24 @@ async def ingest_person(request: Request, payload: ProviderPersonIn):
         person_id = await service.ingest(payload)
 
         # 4. Muvaffaqiyatli response
-        return {
-            "status": "ok",
-            "message": "Person registered successfully",
-            "person_id": person_id
-        }
+        return success(
+            message="Person registered successfully",
+            person_id=person_id
+        )
 
     except ValidationError as e:
-        # Validatsiya xatolari uchun
         error_msg = f"{e.message}"
         if e.field:
             error_msg = f"{e.field}: {e.message}"
 
-        return {
-            "status": "error",
-            "message": error_msg,
-            "person_id": None
-        }
+        return error(message=error_msg, person_id=None)
 
     except ValueError as e:
-        # Service dan kelgan xatolar (face detection, database xatolari)
-        return {
-            "status": "error",
-            "message": str(e),
-            "person_id": None
-        }
+        return error(message=str(e), person_id=None)
 
     except Exception as e:
-        # Boshqa kutilmagan xatolar
         error_msg = str(e)
 
-        # Pydantic validation xatolarini formatlash
         if "validation" in error_msg.lower():
             lines = error_msg.split('\n')
             if len(lines) >= 2:
@@ -94,8 +122,4 @@ async def ingest_person(request: Request, payload: ProviderPersonIn):
                             error_msg = f"{field}: {msg}"
                             break
 
-        return {
-            "status": "error",
-            "message": error_msg,
-            "person_id": None
-        }
+        return error(message=error_msg, person_id=None)
