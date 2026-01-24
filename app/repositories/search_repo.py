@@ -18,7 +18,7 @@ class SearchRepo:
         citizen: Optional[int] = None,
         dtb_from: Optional[str] = None,
         dtb_to: Optional[str] = None,
-        max_distance: float = 0.75,   # 👈 MUHIM
+        max_distance: float = 0.75,
     ) -> List[Dict[str, Any]]:
 
         where = [
@@ -56,7 +56,6 @@ class SearchRepo:
             WITH %(ref)s AS reference_vec
             SELECT
                 person_id,
-                face_url,
                 cosineDistance(polygons, reference_vec) AS distance
             FROM person_documents_v2
             WHERE {where_sql}
@@ -71,8 +70,7 @@ class SearchRepo:
         return [
             {
                 "person_id": r[0],
-                "found_face_url": r[1],
-                "distance": float(r[2]),
+                "distance": float(r[1]),
             }
             for r in rows
         ]
@@ -90,12 +88,13 @@ class SearchRepo:
             """
             SELECT
                 person_id,
-                argMax(full_name, version) AS full_name,
-                argMax(dtb, version) AS dtb,
-                argMax(sex, version) AS sex,
-                argMax(citizen, version) AS citizen,
-                argMax(citizen_sgb, version) AS citizen_sgb,
-                argMax(face_url, version) AS face_url
+                argMax(full_name, version)        AS full_name,
+                argMax(dtb, version)              AS dtb,
+                argMax(sex, version)              AS sex,
+                argMax(citizen, version)          AS citizen,
+                argMax(citizen_sgb, version)      AS citizen_sgb,
+                argMax(passport, version)  AS passport,
+                argMax(passport_expired, version) AS passport_expired
             FROM person_documents_v2
             WHERE person_id IN %(ids)s
             GROUP BY person_id
@@ -111,7 +110,8 @@ class SearchRepo:
                 "sex": int(r[3]) if r[3] is not None else None,
                 "citizen": int(r[4]) if r[4] is not None else None,
                 "citizen_sgb": int(r[5]) if r[5] is not None else None,
-                "face_url": r[6],
+                "passport": r[6],
+                "passport_expired": r[7],
             }
 
         return out
@@ -141,7 +141,7 @@ class SearchRepo:
         return {r[0]: int(r[1]) for r in rows if r[1] is not None}
 
     # ==========================================================
-    # Load last entry / exit
+    # Load last entry / exit + visa (SAFE)
     # ==========================================================
     def load_last_entry_exit(self, person_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not person_ids:
@@ -156,10 +156,13 @@ class SearchRepo:
                 SELECT
                     person_id,
                     border_id,
+                    kpp,
                     action,
                     argMax(reg_date, version) AS reg_date,
+
                     argMax(direction_country, version) AS direction_country,
                     argMax(direction_country_sgb, version) AS direction_country_sgb,
+
                     argMax(visa_type, version) AS visa_type,
                     argMax(visa_number, version) AS visa_number,
                     argMax(visa_organ, version) AS visa_organ,
@@ -167,25 +170,38 @@ class SearchRepo:
                     argMax(visa_date_to, version) AS visa_date_to
                 FROM person_borders_v2
                 WHERE person_id IN %(ids)s
-                GROUP BY person_id, border_id, action
+                GROUP BY person_id, border_id, kpp, action
             )
             SELECT
                 person_id,
 
-                maxIf(reg_date, action = 1) AS last_entry_date,
-                argMaxIf(border_id, reg_date, action = 1) AS last_entry_border_id,
-                argMaxIf(direction_country, reg_date, action = 1) AS last_entry_direction_country,
-                argMaxIf(direction_country_sgb, reg_date, action = 1) AS last_entry_direction_country_sgb,
-                argMaxIf(visa_type, reg_date, action = 1) AS last_entry_visa_type,
-                argMaxIf(visa_number, reg_date, action = 1) AS last_entry_visa_number,
-                argMaxIf(visa_organ, reg_date, action = 1) AS last_entry_visa_organ,
-                argMaxIf(visa_date_from, reg_date, action = 1) AS last_entry_visa_date_from,
-                argMaxIf(visa_date_to, reg_date, action = 1) AS last_entry_visa_date_to,
+                -- ========== LAST ENTRY ==========
+                maxIf(reg_date, action = 1) AS entry_date,
+                argMaxIf(border_id, reg_date, action = 1) AS entry_border_id,
+                argMaxIf(kpp, reg_date, action = 1) AS entry_kpp,
 
-                maxIf(reg_date, action = 2) AS last_exit_date,
-                argMaxIf(border_id, reg_date, action = 2) AS last_exit_border_id,
-                argMaxIf(direction_country, reg_date, action = 2) AS last_exit_direction_country,
-                argMaxIf(direction_country_sgb, reg_date, action = 2) AS last_exit_direction_country_sgb
+                argMaxIf(direction_country, reg_date, action = 1) AS entry_direction_country,
+                argMaxIf(direction_country_sgb, reg_date, action = 1) AS entry_direction_country_sgb,
+
+                argMaxIf(visa_type, reg_date, action = 1) AS entry_visa_type,
+                argMaxIf(visa_number, reg_date, action = 1) AS entry_visa_number,
+                argMaxIf(visa_organ, reg_date, action = 1) AS entry_visa_organ,
+                argMaxIf(visa_date_from, reg_date, action = 1) AS entry_visa_date_from,
+                argMaxIf(visa_date_to, reg_date, action = 1) AS entry_visa_date_to,
+
+                -- ========== LAST EXIT ==========
+                maxIf(reg_date, action = 2) AS exit_date,
+                argMaxIf(border_id, reg_date, action = 2) AS exit_border_id,
+                argMaxIf(kpp, reg_date, action = 2) AS exit_kpp,
+
+                argMaxIf(direction_country, reg_date, action = 2) AS exit_direction_country,
+                argMaxIf(direction_country_sgb, reg_date, action = 2) AS exit_direction_country_sgb,
+
+                argMaxIf(visa_type, reg_date, action = 2) AS exit_visa_type,
+                argMaxIf(visa_number, reg_date, action = 2) AS exit_visa_number,
+                argMaxIf(visa_organ, reg_date, action = 2) AS exit_visa_organ,
+                argMaxIf(visa_date_from, reg_date, action = 2) AS exit_visa_date_from,
+                argMaxIf(visa_date_to, reg_date, action = 2) AS exit_visa_date_to
             FROM dedup
             GROUP BY person_id
             """,
@@ -193,25 +209,39 @@ class SearchRepo:
         )
 
         out: Dict[str, Dict[str, Any]] = {}
+
         for r in rows:
             out[r[0]] = {
                 "last_entry": {
                     "reg_date": r[1],
-                    "border_id": r[2],
-                    "direction_country": r[3],
-                    "direction_country_sgb": r[4],
-                    "visa_type": r[5],
-                    "visa_number": r[6],
-                    "visa_organ": r[7],
-                    "visa_date_from": r[8],
-                    "visa_date_to": r[9],
-                },
+                    "border_id": r[2],   # event id
+                    "kpp": r[3],         # REAL CHECKPOINT
+                    "direction_country": r[4],
+                    "direction_country_sgb": r[5],
+                    "visa": {
+                        "type": r[6],
+                        "number": r[7],
+                        "organ": r[8],
+                        "date_from": r[9],
+                        "date_to": r[10],
+                    } if r[6] else {},
+                } if r[1] else {},
+
                 "last_exit": {
-                    "reg_date": r[10],
-                    "border_id": r[11],
-                    "direction_country": r[12],
-                    "direction_country_sgb": r[13],
-                },
+                    "reg_date": r[11],
+                    "border_id": r[12],
+                    "kpp": r[13],
+                    "direction_country": r[14],
+                    "direction_country_sgb": r[15],
+                    "visa": {
+                        "type": r[16],
+                        "number": r[17],
+                        "organ": r[18],
+                        "date_from": r[19],
+                        "date_to": r[20],
+                    } if r[16] else {},
+                } if r[11] else {},
             }
 
         return out
+

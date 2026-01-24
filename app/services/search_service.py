@@ -80,12 +80,6 @@ class SearchService:
         filters: Optional[SearchFilters] = None,
     ) -> Dict[str, Any]:
 
-        source_image_base64 = (
-            image_b64.split("base64,", 1)[1]
-            if "base64," in image_b64
-            else image_b64
-        )
-
         # -------------------------
         # Decode image
         # -------------------------
@@ -115,7 +109,6 @@ class SearchService:
             return {
                 "status": "ok",
                 "message": "No faces detected",
-                "source_image_base64": source_image_base64,
                 "faces": [],
             }
 
@@ -128,12 +121,12 @@ class SearchService:
         # ==================================================
         for face_index, face in enumerate(faces):
 
-            # -------------------------
-            # Always prepare base face response
-            # -------------------------
+            low_quality = not face.quality_ok
+
             face_result = {
                 "face_index": face_index,
                 "quality_ok": face.quality_ok,
+                "low_quality": low_quality,
                 "quality_issues": face.quality_issues,
                 "crop_face_base64": face.face_b64,
                 "meta": {
@@ -146,15 +139,18 @@ class SearchService:
             }
 
             # -------------------------
-            # If face quality is bad → no DB search
+            # No embedding → no search
             # -------------------------
-            if not face.quality_ok or not face.embedding:
+            if not face.embedding:
                 quality_warning = True
                 faces_out.append(face_result)
                 continue
 
+            if low_quality:
+                quality_warning = True
+
             # -------------------------
-            # 1️⃣ Search similar people
+            # Search similar people
             # -------------------------
             candidates = self.repo.search_similar_people(
                 face.embedding,
@@ -170,20 +166,17 @@ class SearchService:
                 continue
 
             # -------------------------
-            # 2️⃣ Collect ALL person_ids (before filtering)
+            # Load related data
             # -------------------------
             person_ids = [c["person_id"] for c in candidates]
             uniq_ids = list(dict.fromkeys(person_ids))
 
-            # -------------------------
-            # 3️⃣ Load all related data
-            # -------------------------
             profiles = self.repo.load_profiles(uniq_ids)
             sgb_ids = self.repo.load_sgb_ids(uniq_ids)
             borders = self.repo.load_last_entry_exit(uniq_ids)
 
             # -------------------------
-            # 4️⃣ Build matches (filter weak HERE)
+            # Build matches
             # -------------------------
             matches: List[Dict[str, Any]] = []
 
@@ -209,16 +202,20 @@ class SearchService:
                         "sex": profile.get("sex"),
                         "citizen": profile.get("citizen"),
                         "citizen_sgb": profile.get("citizen_sgb"),
-#                         "face_url": profile.get("face_url"),
+                        "passport": profile.get("passport"),
+                        "passport_expired": (
+                            str(profile.get("passport_expired"))
+                            if profile.get("passport_expired") else None
+                        ),
 
-                        "last_entry": border.get("last_entry"),
-                        "last_exit": border.get("last_exit"),
+                        "last_entry": border.get("last_entry", {}),
+                        "last_exit": border.get("last_exit", {}),
                     },
                     "match": {
                         "distance": distance,
                         "accuracy": distance_to_accuracy(distance),
                         "confidence": confidence,
-#                         "found_face_url": c.get("found_face_url"),
+                        "low_quality": low_quality,
                     },
                 })
 
@@ -235,7 +232,6 @@ class SearchService:
                 if len(faces_out) == 1
                 else f"Multi-face search: {len(faces_out)} faces"
             ),
-#             "source_image_base64": source_image_base64,
             "quality_warning": (
                 "Some faces do not meet quality requirements. "
                 "Results for those faces are not guaranteed."
