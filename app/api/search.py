@@ -13,9 +13,19 @@ def build_service(request: Request) -> SearchService:
     repo = SearchRepo(client)
     return SearchService(repo=repo, face_app=face_app)
 
+def transform_codes(payload):
+    data = payload.dict()
+
+    if data['citizen'] == 161:
+        data['citizen'] = 246
+
+    return SearchByPhotoIn(**data)
+
 @router.post("/search-by-photo")
 async def search_by_photo(request: Request, payload: SearchByPhotoIn):
     try:
+        payload = transform_codes(payload)
+
         validate_search_fields(payload)
 
         service = build_service(request)
