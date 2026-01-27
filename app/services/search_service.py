@@ -207,7 +207,7 @@ class SearchService:
                             str(profile.get("passport_expired"))
                             if profile.get("passport_expired") else None
                         ),
-
+                        "face_url": profile.get("face_url"),
                         "last_entry": border.get("last_entry", {}),
                         "last_exit": border.get("last_exit", {}),
                     },

@@ -94,7 +94,8 @@ class SearchRepo:
                 argMax(citizen, version)          AS citizen,
                 argMax(citizen_sgb, version)      AS citizen_sgb,
                 argMax(passport, version)  AS passport,
-                argMax(passport_expired, version) AS passport_expired
+                argMax(passport_expired, version) AS passport_expired,
+                argMax(face_url, version)         AS face_url
             FROM person_documents_v2
             WHERE person_id IN %(ids)s
             GROUP BY person_id
@@ -112,6 +113,7 @@ class SearchRepo:
                 "citizen_sgb": int(r[5]) if r[5] is not None else None,
                 "passport": r[6],
                 "passport_expired": r[7],
+                "face_url": r[8],
             }
 
         return out
@@ -214,8 +216,8 @@ class SearchRepo:
             out[r[0]] = {
                 "last_entry": {
                     "reg_date": r[1],
-                    "border_id": r[2],   # event id
-                    "kpp": r[3],         # REAL CHECKPOINT
+                    "border_id": r[2],
+                    "kpp": r[3],
                     "direction_country": r[4],
                     "direction_country_sgb": r[5],
                     "visa": {
